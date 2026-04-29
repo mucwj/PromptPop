@@ -154,21 +154,9 @@ GitHub Actions runs the same suite and builds the macOS `.app` bundle.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Publishing to GitHub
+## Repository
 
-Before the first public push:
-
-1. Create the GitHub repository.
-2. Add the remote locally:
-
-   ```sh
-   git remote add origin <github-repository-url>
-   ```
-
-3. Update `package.json` with the final `repository`, `homepage`, and `bugs`
-   URLs.
-4. Run `npm run verify` and `npm run tauri:build`.
-5. Commit and push `main`.
+The public repository is <https://github.com/mucwj/PromptPop>.
 
 ## Security
 
