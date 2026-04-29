@@ -1,0 +1,43 @@
+{
+  "name": "promptpop",
+  "version": "0.1.0",
+  "description": "A local-first desktop prompt launcher for saving, searching, copying, and pasting reusable prompts.",
+  "license": "MIT",
+  "author": "PromptPop contributors",
+  "type": "module",
+  "keywords": [
+    "prompt",
+    "launcher",
+    "desktop",
+    "tauri",
+    "svelte",
+    "clipboard"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "test": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "verify": "npm run check && npm run build && npm run test",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "tauri:build:app": "tauri build -- --bundles app",
+    "tauri:build:dmg": "tauri build -- --bundles dmg"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0",
+    "svelte": "^5.0.0"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "@tauri-apps/cli": "^2.0.0",
+    "svelte-check": "^4.0.0",
+    "typescript": "^5.6.0",
+    "vite": "^6.0.0"
+  }
+}

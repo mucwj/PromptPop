@@ -1,0 +1,20 @@
+node_modules/
+dist/
+dist-ssr/
+src-tauri/target/
+src-tauri/gen/
+.omx/
+.DS_Store
+*.log
+.env
+.env.*
+
+# Local editor and OS metadata
+.vscode/
+.idea/
+Thumbs.db
+
+# Local release/signing material
+*.p12
+*.mobileprovision
+*.provisionprofile

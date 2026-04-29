@@ -1,0 +1,6 @@
+{
+  "identifier": "main-capability",
+  "description": "Default permissions for PromptPop",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
