@@ -14,6 +14,12 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            {
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                app.set_dock_visibility(false);
+            }
+
             #[cfg(desktop)]
             app.handle()
                 .plugin(tauri_plugin_global_shortcut::Builder::new().build())?;
@@ -98,6 +104,7 @@ pub fn run() {
             commands::set_launch_at_login,
             commands::hide_launcher,
             commands::open_settings_target,
+            commands::configure_window_mode,
             commands::test_paste,
             commands::save_export,
             commands::backup_database,

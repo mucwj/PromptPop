@@ -410,6 +410,10 @@ export async function hideLauncher(): Promise<void> {
   if (isTauri()) await invoke("hide_launcher");
 }
 
+export async function configureWindowMode(mode: "launcher" | "peek" | "workspace"): Promise<void> {
+  if (isTauri()) await invoke("configure_window_mode", { mode });
+}
+
 export async function openSettingsTarget(
   target: "data" | "logs" | "exports" | "backups" | "accessibility"
 ): Promise<void> {

@@ -4,6 +4,7 @@
     copyPrompt,
     createPrompt,
     backupDatabase,
+    configureWindowMode,
     deletePrompt,
     defaultSettings,
     getAppEnvironment,
@@ -47,6 +48,7 @@
 
   type Filter = "all" | "favorites" | "recent";
   type View = "launcher" | "library" | "settings";
+  type WindowMode = "launcher" | "peek" | "workspace";
   type SettingSection = "general" | "shortcuts" | "paste" | "data" | "appearance" | "advanced";
 
   const emptyDraft: PromptInput = {
@@ -239,8 +241,8 @@
         description: "Tune launcher density, preview, and typography.",
         densityTitle: "Density",
         densityDescription: "Choose how tightly PromptPop packs prompt rows and metadata.",
-        previewTitle: "Show preview pane",
-        previewDescription: "Open a right-side preview when browsing saved prompts.",
+        previewTitle: "Enable preview peek",
+        previewDescription: "Use Space to temporarily inspect the selected prompt without leaving the launcher.",
         usageTitle: "Show usage count",
         usageDescription: "Display run counts beside frequently used prompts.",
         tagsTitle: "Show tags in launcher",
@@ -449,8 +451,8 @@
         description: "调整启动器密度、预览和字体。",
         densityTitle: "密度",
         densityDescription: "选择 PromptPop 如何紧凑地展示提示词行和元数据。",
-        previewTitle: "显示预览面板",
-        previewDescription: "浏览已保存提示词时打开右侧预览。",
+        previewTitle: "启用快速预览",
+        previewDescription: "在启动器中按 Space 临时查看已选提示词，无需离开当前搜索。",
         usageTitle: "显示使用次数",
         usageDescription: "在常用提示词旁显示运行次数。",
         tagsTitle: "在启动器中显示标签",
@@ -506,6 +508,11 @@
   let filter: Filter = "all";
   let selectedIndex = 0;
   let selectedId: string | null = null;
+  let previewPeekOpen = false;
+  let appliedWindowMode: WindowMode | null = null;
+  let requestedWindowMode: WindowMode | null = null;
+  let windowModeRequestId = 0;
+  let windowModeQueue = Promise.resolve();
   let editingId: string | null = null;
   let view: View = "launcher";
   let activeSettingsSection: SettingSection = "general";
@@ -562,6 +569,8 @@
   $: recentCount = prompts.filter((prompt) => prompt.lastUsedAt).length;
   $: selectedVariables = selectedPrompt ? extractVariables(selectedPrompt.body) : [];
   $: searchSummary = getSearchSummary(filteredPrompts.length, prompts.length, query);
+  $: if ((!selectedPrompt || view !== "launcher" || !showPreviewPane) && previewPeekOpen) previewPeekOpen = false;
+  $: syncWindowMode(view === "launcher" ? (previewPeekOpen && selectedPrompt ? "peek" : "launcher") : "workspace");
   $: settingsButtonLabel = settings.buttonLabel;
   $: settingsSavedTitle = settings.savedTitle;
   $: settingsSavedHint = settings.savedHint;
@@ -585,8 +594,7 @@
 
       if (matchesShortcut(event, shortcutBindings.focusSearch)) {
         event.preventDefault();
-        view = "launcher";
-        tick().then(() => searchInput?.focus());
+        showLauncherView();
       }
 
       if ((event.metaKey || event.ctrlKey) && event.key === ",") {
@@ -605,18 +613,25 @@
       }
 
       if (event.key === "Escape") {
-        if (query) {
+        if (previewPeekOpen) {
+          event.preventDefault();
+          closePreviewPeek();
+        } else if (query) {
           query = "";
           selectedIndex = 0;
         } else if (view !== "launcher") {
-          view = "launcher";
-          tick().then(() => searchInput?.focus());
+          showLauncherView();
         } else {
           status = translate("launcherDismissed");
         }
       }
 
       if (view !== "launcher") return;
+
+      if (shouldTogglePreview(event)) {
+        event.preventDefault();
+        togglePreviewPeek();
+      }
 
       if (event.key === "ArrowDown") {
         event.preventDefault();
@@ -657,6 +672,42 @@
 
   function translate(key: TranslationKey, values?: TranslationValues): string {
     return t(locale, key, values);
+  }
+
+  function shouldTogglePreview(event: KeyboardEvent): boolean {
+    if (event.code !== "Space" || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return false;
+    if (!selectedPrompt || !showPreviewPane) return false;
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return false;
+    if (target instanceof HTMLTextAreaElement || target.isContentEditable) return false;
+    if (target instanceof HTMLInputElement && target !== searchInput) return false;
+    if (target === searchInput && query.trim()) return false;
+    return true;
+  }
+
+  function syncWindowMode(mode: WindowMode) {
+    applyWindowMode(mode);
+  }
+
+  function applyWindowMode(mode: WindowMode, force = false) {
+    if (!force && mode === appliedWindowMode && mode === requestedWindowMode) return;
+    requestedWindowMode = mode;
+    const requestId = ++windowModeRequestId;
+
+    windowModeQueue = windowModeQueue
+      .catch(() => undefined)
+      .then(async () => {
+        if (requestId !== windowModeRequestId) return;
+        await configureWindowMode(mode);
+        if (requestId === windowModeRequestId) {
+          appliedWindowMode = mode;
+        }
+      })
+      .catch(() => {
+        if (requestId === windowModeRequestId) {
+          requestedWindowMode = appliedWindowMode;
+        }
+      });
   }
 
   function translateError(error: unknown, fallbackKey: TranslationKey): string {
@@ -751,9 +802,15 @@
         view = "library";
       }
     } else {
-      view = "launcher";
-      tick().then(() => searchInput?.focus());
+      showLauncherView();
     }
+  }
+
+  function showLauncherView() {
+    previewPeekOpen = false;
+    view = "launcher";
+    applyWindowMode("launcher", true);
+    tick().then(() => searchInput?.focus());
   }
 
   function applyAppearanceSettings(theme: ThemeChoice, density: DensityChoice) {
@@ -1014,6 +1071,7 @@
   }
 
   function openSettings(section: SettingSection = "general") {
+    previewPeekOpen = false;
     view = "settings";
     activeSettingsSection = section;
     status = settings.localReady;
@@ -1027,6 +1085,19 @@
   function selectPrompt(prompt: Prompt, index: number) {
     selectedIndex = index;
     selectedId = prompt.id;
+  }
+
+  function togglePreviewPeek() {
+    if (!selectedPrompt || !showPreviewPane) return;
+    previewPeekOpen = !previewPeekOpen;
+    applyWindowMode(previewPeekOpen ? "peek" : "launcher", true);
+    status = previewPeekOpen ? translate("previewOpened", { title: selectedPrompt.title }) : translate("previewClosed");
+  }
+
+  function closePreviewPeek() {
+    previewPeekOpen = false;
+    applyWindowMode("launcher", true);
+    status = translate("previewClosed");
   }
 
   async function copySelected() {
@@ -1086,6 +1157,7 @@
   }
 
   function startNewPrompt() {
+    previewPeekOpen = false;
     view = "library";
     editingId = null;
     draft = { ...emptyDraft };
@@ -1093,6 +1165,7 @@
   }
 
   function startEdit(prompt: Prompt) {
+    previewPeekOpen = false;
     view = "library";
     selectedId = prompt.id;
     editingId = prompt.id;
@@ -1404,54 +1477,53 @@
   class:developer-mode={developerMode}
 >
   {#if view === "launcher"}
-    <section class="window launcher-window" aria-label={text.appAriaPromptLauncher}>
-      <div class="launcher-body" class:without-preview={!showPreviewPane}>
+    <section class="window launcher-window" class:peek-mode={previewPeekOpen && !!selectedPrompt} aria-label={text.appAriaPromptLauncher}>
+      <div class="launcher-stage">
         <section class="launcher-pane">
-          <header class="pane-header">
-            <div>
-              <h1>{text.promptLauncher}</h1>
-              <p>{text.searchPlaceholder}</p>
-            </div>
-            <div class="header-actions">
-              <button class="quiet-button" type="button" on:click={() => openSettings()}>{settingsButtonLabel}</button>
-              <button class="quiet-button" type="button" on:click={openLibrary}>{text.library}</button>
-              <button class="quiet-button" type="button" on:click={startNewPrompt}>+ {text.new}</button>
-            </div>
+          <header class="launcher-topbar">
+            <label class="search-box">
+              <span class="search-glyph">S</span>
+              <input
+                bind:this={searchInput}
+                bind:value={query}
+                type="search"
+                placeholder={text.searchPlaceholder}
+                autocomplete="off"
+                on:input={() => {
+                  selectedIndex = 0;
+                  previewPeekOpen = false;
+                }}
+              />
+            </label>
+            <span class="local-pill"><span class="status-dot"></span>{text.localOnly}</span>
+            <button class="launcher-icon-button" type="button" title={text.library} aria-label={text.library} on:click={openLibrary}>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4.5 19.5h15" />
+                <path d="M6 4.5h3.5v15H6z" />
+                <path d="M11 4.5h3.5v15H11z" />
+                <path d="M16.2 5.2l2.8-.7 3.4 14.2-2.8.7z" />
+              </svg>
+            </button>
+            <button class="launcher-icon-button" type="button" title={settingsButtonLabel} aria-label={settingsButtonLabel} on:click={() => openSettings()}>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5z" />
+                <path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 0 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.2a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 0 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 4.6 15a1.6 1.6 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.2a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1A2 2 0 0 1 7.1 4.3l.1.1A1.6 1.6 0 0 0 9 4.7a1.6 1.6 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.2a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 0 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8 1.6 1.6 0 0 0 1.5 1h.2a2 2 0 0 1 0 4h-.2a1.6 1.6 0 0 0-1.4 1z" />
+              </svg>
+            </button>
           </header>
 
-          <label class="search-box">
-            <span class="search-glyph">S</span>
-            <input
-              bind:this={searchInput}
-              bind:value={query}
-              type="search"
-              placeholder={text.searchPlaceholder}
-              autocomplete="off"
-              on:input={() => (selectedIndex = 0)}
-            />
-            <span class="shortcut-hint" aria-label={settings.shortcuts.rows.focusSearch.title}>
-              {#each shortcutLabels(shortcutBindings.focusSearch) as key}
-                <kbd>{key}</kbd>
-              {/each}
-            </span>
-          </label>
-
-          <nav class="filter-row" aria-label={text.filters}>
+          <nav class="filter-row compact" aria-label={text.filters}>
             <button class:active={filter === "all"} type="button" on:click={() => setFilter("all")}>
-              {text.all} <span>{prompts.length}</span>
+              {text.all}
             </button>
             <button class:active={filter === "favorites"} type="button" on:click={() => setFilter("favorites")}>
-              {text.favorites} <span>{favoriteCount}</span>
+              {text.favorites}
             </button>
             <button class:active={filter === "recent"} type="button" on:click={() => setFilter("recent")}>
-              {text.recent} <span>{recentCount}</span>
+              {text.recent}
             </button>
+            <button class="filter-plus" type="button" title={text.newPrompt} aria-label={text.newPrompt} on:click={startNewPrompt}>+</button>
           </nav>
-
-          <div class="results-heading">
-            <span>{text.appAriaPromptResults}</span>
-            <span>{searchSummary}</span>
-          </div>
 
           {#if loading}
             <div class="empty-panel compact">{text.loadingPrompts}</div>
@@ -1468,7 +1540,7 @@
               </div>
             </div>
           {:else}
-            <ol class="results-list" aria-label={text.appAriaPromptResults}>
+            <ol class="results-list compact" aria-label={text.appAriaPromptResults}>
               {#each filteredPrompts as prompt, index}
                 <li>
                   <button
@@ -1477,17 +1549,16 @@
                     on:click={() => selectPrompt(prompt, index)}
                     on:dblclick={() => copyPromptById(prompt.id)}
                   >
-                    <span class="result-rail"></span>
                     <span class="result-copy">
                       <span class="result-title">
                         <strong>{prompt.title}</strong>
-                        {#if prompt.isFavorite}<span class="pin">{text.pinned}</span>{/if}
                       </span>
                       <span class="result-meta">{promptListMeta(prompt)}</span>
-                      <span class="result-snippet">{promptSnippet(prompt)}</span>
                     </span>
                     <span class="result-side">
-                      {#if showUsageCount}<span>{prompt.usageCount}</span>{/if}
+                      {#if index === selectedIndex && showUsageCount && prompt.lastUsedAt}
+                        <small>{formatDate(prompt.lastUsedAt, locale)}</small>
+                      {/if}
                       <kbd>{shortcutText(resultJumpShortcut(shortcutBindings.jumpResult, index))}</kbd>
                     </span>
                   </button>
@@ -1497,58 +1568,37 @@
           {/if}
 
           <footer class="commandbar">
-            <span>
-              {#each shortcutLabels(shortcutBindings.copySelected) as key}
-                <kbd>{key}</kbd>
-              {/each}
-              {text.copyShortcut}
-            </span>
-            <span>
-              {#each shortcutLabels(shortcutBindings.pasteSelected) as key}
-                <kbd>{key}</kbd>
-              {/each}
-              {text.pasteShortcut}
-            </span>
-            <span>
-              {#each shortcutLabels(shortcutBindings.editSelected) as key}
-                <kbd>{key}</kbd>
-              {/each}
-              {text.editShortcut}
-            </span>
-            <strong>Keyboard first</strong>
+            <span><span class="status-dot"></span>{searchSummary}</span>
+            <button class="command-action" type="button" on:click={copySelected} disabled={!selectedPrompt}>
+              <kbd>{shortcutText(shortcutBindings.copySelected)}</kbd>{text.copyShortcut}
+            </button>
+            <button class="command-action" type="button" on:click={togglePreviewPeek} disabled={!selectedPrompt || !showPreviewPane} aria-pressed={previewPeekOpen}>
+              <kbd>Space</kbd>{text.previewShortcut}
+            </button>
+            <button class="command-action" type="button" on:click={pasteSelected} disabled={!selectedPrompt}>
+              <kbd>{shortcutText(shortcutBindings.pasteSelected)}</kbd>{text.pasteShortcut}
+            </button>
           </footer>
         </section>
 
-        {#if showPreviewPane}<aside class="preview-pane" aria-label={text.appAriaSelectedPreview}>
-          {#if selectedPrompt}
-            <header class="preview-header">
-              <div>
-                <span class="eyebrow">{text.preview}</span>
-                <h2>{selectedPrompt.title}</h2>
-                <p>{promptMeta(selectedPrompt)}</p>
-              </div>
-              <div class="preview-actions">
-                <button class="primary-button" type="button" on:click={copySelected}>{text.copy}</button>
-                <button class="quiet-button" type="button" on:click={() => startEdit(selectedPrompt)}>{text.editPrompt}</button>
-                <button class="quiet-button" type="button" on:click={pasteSelected}>{text.pasteShortcut}</button>
-              </div>
+        {#if previewPeekOpen && selectedPrompt}
+          <aside class="preview-peek" aria-label={text.appAriaSelectedPreview}>
+            <header class="peek-header">
+              <strong><kbd>Space</kbd>{text.preview}</strong>
+              <button class="peek-close" type="button" on:click={closePreviewPeek}>Esc {text.close}</button>
             </header>
-
-            <div class="meta-strip">
-              <div><span>{text.alias}</span><strong>{selectedPrompt.alias || text.none}</strong></div>
-              <div><span>{text.tags}</span><strong>{selectedPrompt.tags.map((tag) => tag.name).join(", ") || text.none}</strong></div>
-              <div><span>{text.lastUsed}</span><strong>{formatDate(selectedPrompt.lastUsedAt, locale)}</strong></div>
-            </div>
-
-            <section class="prompt-card">
+            <section class="peek-title">
+              <h2>{selectedPrompt.title}</h2>
+              <p>{promptMeta(selectedPrompt)}</p>
+            </section>
+            <section class="prompt-card peek-body">
               <div class="card-title">
-                <strong>{text.body}</strong>
+                <strong>{text.previewBody}</strong>
                 <span>{selectedPrompt.body.length} chars</span>
               </div>
               <pre>{selectedPrompt.body}</pre>
             </section>
-
-            <section class="variables-panel">
+            <section class="variables-panel compact">
               <strong>{selectedVariables.length ? "VARIABLES" : text.notes}</strong>
               {#if selectedVariables.length}
                 <div class="variable-list">
@@ -1560,15 +1610,12 @@
                 <p>{selectedPrompt.notes || text.noMetadata}</p>
               {/if}
             </section>
-
-            <footer class="preview-footer">
-              <span>{text.copyShortcut} - {text.pasteShortcut} - {text.editShortcut}</span>
-              <span class="ready-pill"><span class="status-dot"></span>{text.ready}</span>
+            <footer class="peek-actions">
+              <button class="primary-button" type="button" on:click={copySelected}>{shortcutText(shortcutBindings.copySelected)} {text.copyShortcut}</button>
+              <button class="quiet-button" type="button" on:click={pasteSelected}>{shortcutText(shortcutBindings.pasteSelected)} {text.pasteShortcut}</button>
             </footer>
-          {:else}
-            <div class="empty-panel">{text.noPromptsFound}</div>
-          {/if}
-        </aside>{/if}
+          </aside>
+        {/if}
       </div>
     </section>
   {:else if view === "settings"}
@@ -2112,7 +2159,7 @@
         </div>
         <div class="library-actions">
           <span class="db-pill">SQLite local / {prompts.length}</span>
-          <button class="quiet-button" type="button" on:click={() => (view = "launcher")}>{text.launcher}</button>
+          <button class="quiet-button" type="button" on:click={showLauncherView}>{text.launcher}</button>
           <button class="quiet-button" type="button" on:click={() => openSettings()}>{settingsButtonLabel}</button>
           <button class="primary-button" type="button" on:click={startNewPrompt}>+ {text.newPrompt}</button>
         </div>

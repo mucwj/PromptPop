@@ -1,7 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{
+    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, Position, Runtime, Size, State,
+    WebviewWindow,
+};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
@@ -13,6 +16,13 @@ use crate::models::{
 
 const APP_IDENTIFIER: &str = "com.promptpop.desktop";
 const DEFAULT_LAUNCHER_SHORTCUT: &str = "Alt+Space";
+const LAUNCHER_WIDTH: f64 = 430.0;
+const LAUNCHER_HEIGHT: f64 = 540.0;
+const PEEK_WIDTH: f64 = 760.0;
+const WORKSPACE_WIDTH: f64 = 1120.0;
+const WORKSPACE_HEIGHT: f64 = 720.0;
+const WORKSPACE_MIN_WIDTH: f64 = 720.0;
+const WORKSPACE_MIN_HEIGHT: f64 = 560.0;
 
 #[tauri::command]
 pub fn list_prompts(state: State<'_, AppState>) -> Result<Vec<Prompt>, String> {
@@ -148,6 +158,11 @@ pub fn hide_launcher(app: AppHandle) -> Result<(), String> {
         window.hide().map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+#[tauri::command]
+pub fn configure_window_mode(app: AppHandle, mode: String) -> Result<(), String> {
+    configure_window_mode_inner(&app, &mode)
 }
 
 #[tauri::command]
@@ -292,6 +307,7 @@ pub(crate) fn register_saved_launcher_shortcut(
 
 pub(crate) fn show_launcher(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
+        let _ = configure_window_mode_inner(app, "launcher");
         let _ = window.show();
         let _ = window.set_focus();
     }
@@ -305,10 +321,95 @@ pub(crate) fn toggle_launcher(app: &AppHandle) {
             return;
         }
 
+        let _ = configure_window_mode_inner(app, "launcher");
         let _ = window.show();
         let _ = window.set_focus();
     }
     let _ = app.emit("promptpop:launcher-shortcut", ());
+}
+
+fn configure_window_mode_inner(app: &AppHandle, mode: &str) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("main") else {
+        return Ok(());
+    };
+
+    let (width, height, min_width, min_height, resizable) = match mode {
+        "launcher" => (
+            LAUNCHER_WIDTH,
+            LAUNCHER_HEIGHT,
+            LAUNCHER_WIDTH,
+            LAUNCHER_HEIGHT,
+            false,
+        ),
+        "peek" => (
+            PEEK_WIDTH,
+            LAUNCHER_HEIGHT,
+            PEEK_WIDTH,
+            LAUNCHER_HEIGHT,
+            false,
+        ),
+        "workspace" => (
+            WORKSPACE_WIDTH,
+            WORKSPACE_HEIGHT,
+            WORKSPACE_MIN_WIDTH,
+            WORKSPACE_MIN_HEIGHT,
+            true,
+        ),
+        _ => return Err(format!("Unknown window mode: {mode}")),
+    };
+
+    window
+        .set_min_size(Some(Size::Logical(LogicalSize::new(min_width, min_height))))
+        .map_err(|error| error.to_string())?;
+    window
+        .set_resizable(resizable)
+        .map_err(|error| error.to_string())?;
+    window
+        .set_size(Size::Logical(LogicalSize::new(width, height)))
+        .map_err(|error| error.to_string())?;
+    set_center_position_for_inner_size(&window, width, height)?;
+    Ok(())
+}
+
+fn set_center_position_for_inner_size<R: Runtime>(
+    window: &WebviewWindow<R>,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    let monitor = window
+        .current_monitor()
+        .map_err(|error| error.to_string())?
+        .or(window
+            .primary_monitor()
+            .map_err(|error| error.to_string())?);
+
+    let Some(monitor) = monitor else {
+        return window.center().map_err(|error| error.to_string());
+    };
+
+    let scale_factor = monitor.scale_factor();
+    let target_inner_width = (width * scale_factor).round() as i32;
+    let target_inner_height = (height * scale_factor).round() as i32;
+    let chrome_size = window
+        .outer_size()
+        .ok()
+        .zip(window.inner_size().ok())
+        .map(|(outer, inner)| {
+            (
+                outer.width.saturating_sub(inner.width) as i32,
+                outer.height.saturating_sub(inner.height) as i32,
+            )
+        })
+        .unwrap_or((0, 0));
+    let target_outer_width = target_inner_width + chrome_size.0;
+    let target_outer_height = target_inner_height + chrome_size.1;
+    let work_area = monitor.work_area();
+    let x = work_area.position.x + (work_area.size.width as i32 - target_outer_width) / 2;
+    let y = work_area.position.y + (work_area.size.height as i32 - target_outer_height) / 2;
+
+    window
+        .set_position(Position::Physical(PhysicalPosition::new(x, y)))
+        .map_err(|error| error.to_string())
 }
 
 fn clean_shortcut(shortcut: &str) -> String {
