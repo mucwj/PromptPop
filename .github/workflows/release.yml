@@ -43,21 +43,33 @@ jobs:
           NOTES
           )"
 
-          if gh release view "${tag}" >/dev/null 2>&1; then
-            release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" --jq '.id')"
+          release_id="$(
+            gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+              --jq "map(select(.tag_name == \"${tag}\")) | first | .id // \"\""
+          )"
+
+          if [[ -n "${release_id}" ]]; then
             gh api \
               --method PATCH \
               "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
               -f name="${title}" \
               -f body="${body}" \
+              -f target_commitish="${GITHUB_SHA}" \
               -F draft=true \
               -F prerelease=false >/dev/null
           else
-            gh release create "${tag}" \
-              --draft \
-              --title "${title}" \
-              --notes "${body}" >/dev/null
-            release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" --jq '.id')"
+            release_id="$(
+              gh api \
+                --method POST \
+                "repos/${GITHUB_REPOSITORY}/releases" \
+                -f tag_name="${tag}" \
+                -f target_commitish="${GITHUB_SHA}" \
+                -f name="${title}" \
+                -f body="${body}" \
+                -F draft=true \
+                -F prerelease=false \
+                --jq '.id'
+            )"
           fi
 
           echo "release_id=${release_id}" >> "${GITHUB_OUTPUT}"
