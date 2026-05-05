@@ -41,6 +41,7 @@ pub fn run() {
 
                 let tray_menu = MenuBuilder::new(app)
                     .text("promptpop-show", "显示 PromptPop")
+                    .text("promptpop-settings", "打开设置")
                     .separator()
                     .text("promptpop-quit", "退出 PromptPop")
                     .build()?;
@@ -58,6 +59,8 @@ pub fn run() {
                     .on_menu_event(|app, event| {
                         if event.id() == "promptpop-show" {
                             commands::show_launcher(app);
+                        } else if event.id() == "promptpop-settings" {
+                            commands::show_settings(app);
                         } else if event.id() == "promptpop-quit" {
                             app.exit(0);
                         }
@@ -91,6 +94,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_prompts,
+            commands::restore_starter_snippets,
             commands::create_prompt,
             commands::update_prompt,
             commands::delete_prompt,

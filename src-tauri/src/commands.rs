@@ -14,6 +14,7 @@ use crate::models::{
     AppEnvironment, Prompt, PromptInput, PromptUpdateInput, SavedFile, Setting, Tag,
 };
 
+#[cfg(target_os = "macos")]
 const APP_IDENTIFIER: &str = "com.promptpop.desktop";
 const DEFAULT_LAUNCHER_SHORTCUT: &str = "Alt+Space";
 const LAUNCHER_WIDTH: f64 = 430.0;
@@ -28,6 +29,15 @@ const WORKSPACE_MIN_HEIGHT: f64 = 560.0;
 pub fn list_prompts(state: State<'_, AppState>) -> Result<Vec<Prompt>, String> {
     let conn = state.conn.lock().map_err(|error| error.to_string())?;
     database::list_prompts(&conn)
+}
+
+#[tauri::command]
+pub fn restore_starter_snippets(
+    state: State<'_, AppState>,
+    locale: Option<String>,
+) -> Result<usize, String> {
+    let conn = state.conn.lock().map_err(|error| error.to_string())?;
+    database::restore_starter_snippets(&conn, locale.as_deref())
 }
 
 #[tauri::command]
@@ -112,7 +122,7 @@ pub fn app_environment(
         logs_dir: display_path(&logs_dir),
         exports_dir: display_path(&exports_dir),
         backups_dir: display_path(&backups_dir),
-        launch_at_login: launch_agent_path().exists(),
+        launch_at_login: launch_at_login_enabled(),
         accessibility_trusted: accessibility_trusted(),
     })
 }
@@ -146,7 +156,7 @@ pub fn register_launcher_shortcut(
 
 #[tauri::command]
 pub fn set_launch_at_login(state: State<'_, AppState>, enabled: bool) -> Result<bool, String> {
-    set_launch_agent(enabled)?;
+    set_launch_at_login_platform(enabled)?;
     let conn = state.conn.lock().map_err(|error| error.to_string())?;
     database::set_setting(&conn, "launchAtLogin".to_string(), enabled.to_string())?;
     Ok(enabled)
@@ -168,9 +178,7 @@ pub fn configure_window_mode(app: AppHandle, mode: String) -> Result<(), String>
 #[tauri::command]
 pub fn open_settings_target(app: AppHandle, target: String) -> Result<(), String> {
     match target.as_str() {
-        "accessibility" => open_external(
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-        ),
+        "accessibility" => open_accessibility_settings(),
         "data" => open_path(
             app.path()
                 .app_data_dir()
@@ -198,6 +206,7 @@ pub fn test_paste(app: AppHandle) -> Result<(), String> {
     app.clipboard()
         .write_text(format!("PromptPop paste test {}", database::now()))
         .map_err(|error| error.to_string())?;
+    let _ = hide_launcher_window(&app);
     trigger_paste();
     Ok(())
 }
@@ -265,6 +274,7 @@ pub fn paste_prompt(
     app.clipboard()
         .write_text(prompt.body.clone())
         .map_err(|error| error.to_string())?;
+    let _ = hide_launcher_window(&app);
     trigger_paste();
     Ok(prompt)
 }
@@ -306,12 +316,22 @@ pub(crate) fn register_saved_launcher_shortcut(
 }
 
 pub(crate) fn show_launcher(app: &AppHandle) {
+    remember_paste_target();
     if let Some(window) = app.get_webview_window("main") {
         let _ = configure_window_mode_inner(app, "launcher");
         let _ = window.show();
         let _ = window.set_focus();
     }
     let _ = app.emit("promptpop:launcher-shortcut", ());
+}
+
+pub(crate) fn show_settings(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = configure_window_mode_inner(app, "workspace");
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    let _ = app.emit("promptpop:open-settings", ());
 }
 
 pub(crate) fn toggle_launcher(app: &AppHandle) {
@@ -321,6 +341,7 @@ pub(crate) fn toggle_launcher(app: &AppHandle) {
             return;
         }
 
+        remember_paste_target();
         let _ = configure_window_mode_inner(app, "launcher");
         let _ = window.show();
         let _ = window.set_focus();
@@ -459,6 +480,27 @@ fn open_path(path: PathBuf) -> Result<(), String> {
     open_external(&display_path(&path))
 }
 
+fn hide_launcher_window(app: &AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("main") {
+        window.hide().map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn open_accessibility_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        return open_external(
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("Accessibility permission settings are only available on macOS".to_string())
+    }
+}
+
 fn open_external(target: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let mut command = {
@@ -485,6 +527,7 @@ fn open_external(target: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn launch_agent_path() -> PathBuf {
     let home = std::env::var_os("HOME").unwrap_or_default();
     PathBuf::from(home)
@@ -511,6 +554,45 @@ fn app_launch_argument() -> String {
     "/Applications/PromptPop.app".to_string()
 }
 
+fn launch_at_login_enabled() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        return launch_agent_path().exists();
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        return windows_launch_at_login::enabled();
+    }
+
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    {
+        false
+    }
+}
+
+fn set_launch_at_login_platform(enabled: bool) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        return set_launch_agent(enabled);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        return windows_launch_at_login::set_enabled(enabled, &app_launch_argument());
+    }
+
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    {
+        if enabled {
+            Err("Launch at login is not supported on this platform".to_string())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn set_launch_agent(enabled: bool) -> Result<(), String> {
     let path = launch_agent_path();
     if !enabled {
@@ -569,6 +651,216 @@ fn set_launch_agent(enabled: bool) -> Result<(), String> {
     fs::write(path, plist).map_err(|error| error.to_string())
 }
 
+#[cfg(target_os = "windows")]
+mod windows_launch_at_login {
+    use std::ffi::c_void;
+
+    type Dword = u32;
+    type Hkey = isize;
+    type Long = i32;
+
+    const ERROR_FILE_NOT_FOUND: Long = 2;
+    const ERROR_SUCCESS: Long = 0;
+    const HKEY_CURRENT_USER: Hkey = 0x80000001u32 as i32 as Hkey;
+    const KEY_QUERY_VALUE: Dword = 0x0001;
+    const KEY_SET_VALUE: Dword = 0x0002;
+    const REG_OPTION_NON_VOLATILE: Dword = 0;
+    const REG_SZ: Dword = 1;
+    const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+    const VALUE_NAME: &str = "PromptPop";
+
+    #[link(name = "Advapi32")]
+    unsafe extern "system" {
+        fn RegCloseKey(h_key: Hkey) -> Long;
+        fn RegCreateKeyExW(
+            h_key: Hkey,
+            sub_key: *const u16,
+            reserved: Dword,
+            class: *mut u16,
+            options: Dword,
+            sam_desired: Dword,
+            security_attributes: *mut c_void,
+            result: *mut Hkey,
+            disposition: *mut Dword,
+        ) -> Long;
+        fn RegDeleteValueW(h_key: Hkey, value_name: *const u16) -> Long;
+        fn RegOpenKeyExW(
+            h_key: Hkey,
+            sub_key: *const u16,
+            options: Dword,
+            sam_desired: Dword,
+            result: *mut Hkey,
+        ) -> Long;
+        fn RegQueryValueExW(
+            h_key: Hkey,
+            value_name: *const u16,
+            reserved: *mut Dword,
+            value_type: *mut Dword,
+            data: *mut u8,
+            data_size: *mut Dword,
+        ) -> Long;
+        fn RegSetValueExW(
+            h_key: Hkey,
+            value_name: *const u16,
+            reserved: Dword,
+            value_type: Dword,
+            data: *const u8,
+            data_size: Dword,
+        ) -> Long;
+    }
+
+    struct RegistryKey(Hkey);
+
+    impl Drop for RegistryKey {
+        fn drop(&mut self) {
+            let _ = unsafe { RegCloseKey(self.0) };
+        }
+    }
+
+    pub fn enabled() -> bool {
+        query_run_value().is_some_and(|value| !value.trim().is_empty())
+    }
+
+    pub fn set_enabled(enabled: bool, launch_argument: &str) -> Result<(), String> {
+        if enabled {
+            set_run_value(launch_argument)
+        } else {
+            delete_run_value()
+        }
+    }
+
+    fn set_run_value(launch_argument: &str) -> Result<(), String> {
+        let key = create_run_key()?;
+        let value_name = wide_null(VALUE_NAME);
+        let value = wide_null(&quote_launch_argument(launch_argument));
+        let status = unsafe {
+            RegSetValueExW(
+                key.0,
+                value_name.as_ptr(),
+                0,
+                REG_SZ,
+                value.as_ptr().cast(),
+                (value.len() * 2) as Dword,
+            )
+        };
+
+        if status == ERROR_SUCCESS {
+            Ok(())
+        } else {
+            Err(format!("Unable to set Windows launch at login: {status}"))
+        }
+    }
+
+    fn delete_run_value() -> Result<(), String> {
+        let key = match open_run_key(KEY_SET_VALUE) {
+            Ok(key) => key,
+            Err(_) => return Ok(()),
+        };
+        let value_name = wide_null(VALUE_NAME);
+        let status = unsafe { RegDeleteValueW(key.0, value_name.as_ptr()) };
+
+        if matches!(status, ERROR_SUCCESS | ERROR_FILE_NOT_FOUND) {
+            Ok(())
+        } else {
+            Err(format!(
+                "Unable to remove Windows launch at login: {status}"
+            ))
+        }
+    }
+
+    fn query_run_value() -> Option<String> {
+        let key = open_run_key(KEY_QUERY_VALUE).ok()?;
+        let value_name = wide_null(VALUE_NAME);
+        let mut value_type = 0;
+        let mut byte_len = 0;
+        let status = unsafe {
+            RegQueryValueExW(
+                key.0,
+                value_name.as_ptr(),
+                std::ptr::null_mut(),
+                &mut value_type,
+                std::ptr::null_mut(),
+                &mut byte_len,
+            )
+        };
+        if status != ERROR_SUCCESS || value_type != REG_SZ || byte_len < 2 {
+            return None;
+        }
+
+        let mut buffer = vec![0u16; ((byte_len as usize) + 1) / 2];
+        let status = unsafe {
+            RegQueryValueExW(
+                key.0,
+                value_name.as_ptr(),
+                std::ptr::null_mut(),
+                &mut value_type,
+                buffer.as_mut_ptr().cast(),
+                &mut byte_len,
+            )
+        };
+        if status != ERROR_SUCCESS || value_type != REG_SZ {
+            return None;
+        }
+
+        let len = buffer
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(buffer.len());
+        Some(String::from_utf16_lossy(&buffer[..len]))
+    }
+
+    fn create_run_key() -> Result<RegistryKey, String> {
+        let sub_key = wide_null(RUN_KEY);
+        let mut key = 0;
+        let status = unsafe {
+            RegCreateKeyExW(
+                HKEY_CURRENT_USER,
+                sub_key.as_ptr(),
+                0,
+                std::ptr::null_mut(),
+                REG_OPTION_NON_VOLATILE,
+                KEY_SET_VALUE,
+                std::ptr::null_mut(),
+                &mut key,
+                std::ptr::null_mut(),
+            )
+        };
+
+        if status == ERROR_SUCCESS {
+            Ok(RegistryKey(key))
+        } else {
+            Err(format!("Unable to open Windows Run registry key: {status}"))
+        }
+    }
+
+    fn open_run_key(access: Dword) -> Result<RegistryKey, String> {
+        let sub_key = wide_null(RUN_KEY);
+        let mut key = 0;
+        let status =
+            unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, sub_key.as_ptr(), 0, access, &mut key) };
+
+        if status == ERROR_SUCCESS {
+            Ok(RegistryKey(key))
+        } else {
+            Err(format!("Unable to open Windows Run registry key: {status}"))
+        }
+    }
+
+    fn quote_launch_argument(value: &str) -> String {
+        let trimmed = value.trim();
+        if trimmed.starts_with('"') && trimmed.ends_with('"') {
+            trimmed.to_string()
+        } else {
+            format!("\"{}\"", trimmed.replace('"', "\\\""))
+        }
+    }
+
+    fn wide_null(value: &str) -> Vec<u16> {
+        value.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn escape_plist(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -603,5 +895,218 @@ fn trigger_paste() {
             .arg("-e")
             .arg("tell application \"System Events\" to keystroke \"v\" using command down")
             .status();
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        windows_paste::trigger_paste();
+    }
+}
+
+fn remember_paste_target() {
+    #[cfg(target_os = "windows")]
+    {
+        windows_paste::remember_foreground_window();
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod windows_paste {
+    use std::mem;
+    use std::sync::{Mutex, OnceLock};
+    use std::thread;
+    use std::time::Duration;
+
+    type Hwnd = isize;
+    type Dword = u32;
+    type Long = i32;
+    type Word = u16;
+
+    const INPUT_KEYBOARD: Dword = 1;
+    const KEYEVENTF_KEYUP: Dword = 0x0002;
+    const VK_CONTROL: Word = 0x11;
+    const VK_MENU: Word = 0x12;
+    const VK_V: Word = 0x56;
+    const SW_RESTORE: i32 = 9;
+
+    static PREVIOUS_FOREGROUND_WINDOW: OnceLock<Mutex<Option<Hwnd>>> = OnceLock::new();
+
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct Input {
+        r#type: Dword,
+        u: InputUnion,
+    }
+
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    union InputUnion {
+        mi: MouseInput,
+        ki: KeybdInput,
+    }
+
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct MouseInput {
+        dx: Long,
+        dy: Long,
+        mouse_data: Dword,
+        dw_flags: Dword,
+        time: Dword,
+        dw_extra_info: usize,
+    }
+
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct KeybdInput {
+        w_vk: Word,
+        w_scan: Word,
+        dw_flags: Dword,
+        time: Dword,
+        dw_extra_info: usize,
+    }
+
+    unsafe extern "system" {
+        fn GetClassNameW(hwnd: Hwnd, class_name: *mut u16, max_count: i32) -> i32;
+        fn GetCurrentProcessId() -> Dword;
+        fn GetForegroundWindow() -> Hwnd;
+        fn GetCurrentThreadId() -> Dword;
+        fn GetWindowThreadProcessId(hwnd: Hwnd, process_id: *mut Dword) -> Dword;
+        fn IsWindow(hwnd: Hwnd) -> i32;
+        fn IsIconic(hwnd: Hwnd) -> i32;
+        fn AttachThreadInput(id_attach: Dword, id_attach_to: Dword, attach: i32) -> i32;
+        fn BringWindowToTop(hwnd: Hwnd) -> i32;
+        fn SetFocus(hwnd: Hwnd) -> Hwnd;
+        fn SetForegroundWindow(hwnd: Hwnd) -> i32;
+        fn ShowWindow(hwnd: Hwnd, cmd_show: i32) -> i32;
+        fn SendInput(c_inputs: u32, p_inputs: *const Input, cb_size: i32) -> u32;
+    }
+
+    pub fn remember_foreground_window() {
+        let hwnd = unsafe { GetForegroundWindow() };
+        let target = PREVIOUS_FOREGROUND_WINDOW.get_or_init(|| Mutex::new(None));
+        if let Ok(mut saved) = target.lock() {
+            *saved = if is_valid_paste_target(hwnd) {
+                Some(hwnd)
+            } else {
+                None
+            };
+        }
+    }
+
+    pub fn trigger_paste() {
+        if let Some(hwnd) = saved_foreground_window() {
+            if unsafe { IsWindow(hwnd) } != 0 {
+                restore_foreground_window(hwnd);
+            }
+        }
+
+        thread::sleep(Duration::from_millis(180));
+        send_key_chord(&[VK_CONTROL], VK_V);
+    }
+
+    fn is_valid_paste_target(hwnd: Hwnd) -> bool {
+        if hwnd == 0 || unsafe { IsWindow(hwnd) } == 0 {
+            return false;
+        }
+
+        let mut process_id = 0;
+        let _ = unsafe { GetWindowThreadProcessId(hwnd, &mut process_id) };
+        if process_id == unsafe { GetCurrentProcessId() } {
+            return false;
+        }
+
+        !matches!(
+            window_class_name(hwnd).as_deref(),
+            Some("Shell_TrayWnd" | "Shell_SecondaryTrayWnd" | "NotifyIconOverflowWindow")
+        )
+    }
+
+    fn window_class_name(hwnd: Hwnd) -> Option<String> {
+        let mut buffer = [0u16; 256];
+        let length = unsafe { GetClassNameW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32) };
+        if length <= 0 {
+            return None;
+        }
+
+        Some(String::from_utf16_lossy(&buffer[..length as usize]))
+    }
+
+    fn restore_foreground_window(hwnd: Hwnd) {
+        if unsafe { IsIconic(hwnd) } != 0 {
+            let _ = unsafe { ShowWindow(hwnd, SW_RESTORE) };
+        }
+
+        // A short Alt press lets this process legally hand foreground back to
+        // the target under Windows foreground-lock rules.
+        tap_key(VK_MENU);
+
+        let current_thread = unsafe { GetCurrentThreadId() };
+        let target_thread = unsafe { GetWindowThreadProcessId(hwnd, std::ptr::null_mut()) };
+        let attached = target_thread != 0
+            && target_thread != current_thread
+            && unsafe { AttachThreadInput(current_thread, target_thread, 1) } != 0;
+
+        let _ = unsafe { BringWindowToTop(hwnd) };
+        let _ = unsafe { SetForegroundWindow(hwnd) };
+        let _ = unsafe { SetFocus(hwnd) };
+
+        if attached {
+            let _ = unsafe { AttachThreadInput(current_thread, target_thread, 0) };
+        }
+
+        thread::sleep(Duration::from_millis(180));
+    }
+
+    fn send_key_chord(modifiers: &[Word], key: Word) {
+        let mut inputs = Vec::with_capacity((modifiers.len() * 2) + 2);
+        for modifier in modifiers {
+            inputs.push(key_input(*modifier, 0));
+        }
+        inputs.push(key_input(key, 0));
+        inputs.push(key_input(key, KEYEVENTF_KEYUP));
+        for modifier in modifiers.iter().rev() {
+            inputs.push(key_input(*modifier, KEYEVENTF_KEYUP));
+        }
+
+        let _ = unsafe {
+            SendInput(
+                inputs.len() as u32,
+                inputs.as_ptr(),
+                mem::size_of::<Input>() as i32,
+            )
+        };
+    }
+
+    fn tap_key(key: Word) {
+        let inputs = [key_input(key, 0), key_input(key, KEYEVENTF_KEYUP)];
+        let _ = unsafe {
+            SendInput(
+                inputs.len() as u32,
+                inputs.as_ptr(),
+                mem::size_of::<Input>() as i32,
+            )
+        };
+    }
+
+    fn saved_foreground_window() -> Option<Hwnd> {
+        PREVIOUS_FOREGROUND_WINDOW
+            .get()
+            .and_then(|target| target.lock().ok().and_then(|saved| *saved))
+    }
+
+    fn key_input(vk: Word, flags: Dword) -> Input {
+        Input {
+            r#type: INPUT_KEYBOARD,
+            u: InputUnion {
+                ki: KeybdInput {
+                    w_vk: vk,
+                    w_scan: 0,
+                    dw_flags: flags,
+                    time: 0,
+                    dw_extra_info: 0,
+                },
+            },
+        }
     }
 }

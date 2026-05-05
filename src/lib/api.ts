@@ -11,6 +11,8 @@ import type {
   SavedFile,
   SettingRecord
 } from "./types";
+import { defaultShortcutBindings, migrateShortcutBindingsForPlatform } from "./platform";
+import { STARTER_SNIPPET_COUNT, starterSnippetInputsForLocale } from "./starter-snippets";
 
 const PROMPTS_KEY = "promptpop.mock.prompts";
 const TAGS_KEY = "promptpop.mock.tags";
@@ -22,53 +24,33 @@ const isTauri = () => typeof window !== "undefined" && Boolean(window.__TAURI_IN
 const now = () => new Date().toISOString();
 const id = () => crypto.randomUUID();
 
-const seedTags: PromptTag[] = [
-  { id: id(), name: "writing", color: "#4f8cff", createdAt: now() },
-  { id: id(), name: "coding", color: "#16a085", createdAt: now() },
-  { id: id(), name: "review", color: "#c47a2c", createdAt: now() }
-];
+function systemStarterSnippetLocale(): string {
+  if (typeof navigator === "undefined") return "en";
+  return navigator.languages?.find(Boolean) ?? navigator.language ?? "en";
+}
 
-const seedPrompts: Prompt[] = [
-  {
-    id: id(),
-    title: "Rewrite for clarity",
-    body: "Rewrite the following text to be clearer, tighter, and more natural while preserving the original meaning:\n\n{{text}}",
-    alias: "clarify",
-    notes: "Good for email, docs, and product copy.",
-    isFavorite: true,
-    usageCount: 12,
-    lastUsedAt: now(),
-    createdAt: now(),
-    updatedAt: now(),
-    tags: [seedTags[0]]
-  },
-  {
-    id: id(),
-    title: "Code review pass",
-    body: "Review this change for correctness, edge cases, maintainability, and missing tests. Lead with concrete findings:\n\n{{diff}}",
-    alias: "review",
-    notes: "Use before opening a PR.",
-    isFavorite: true,
-    usageCount: 8,
-    lastUsedAt: null,
-    createdAt: now(),
-    updatedAt: now(),
-    tags: [seedTags[1], seedTags[2]]
-  },
-  {
-    id: id(),
-    title: "Summarize meeting notes",
-    body: "Summarize these notes into decisions, open questions, owners, and next actions:\n\n{{notes}}",
-    alias: "sum",
-    notes: null,
-    isFavorite: false,
-    usageCount: 3,
-    lastUsedAt: null,
-    createdAt: now(),
-    updatedAt: now(),
-    tags: [seedTags[0]]
-  }
-];
+const starterSnippetInputs = starterSnippetInputsForLocale(systemStarterSnippetLocale());
+const seedTagNames = [...new Set(starterSnippetInputs.flatMap((prompt) => prompt.tags))];
+const seedTags: PromptTag[] = seedTagNames.map((name) => ({
+  id: id(),
+  name,
+  color: null,
+  createdAt: now()
+}));
+
+const seedPrompts: Prompt[] = starterSnippetInputs.map((input) => ({
+  id: id(),
+  title: input.title,
+  body: input.body,
+  alias: input.alias,
+  notes: input.notes,
+  isFavorite: input.isFavorite,
+  usageCount: 0,
+  lastUsedAt: null,
+  createdAt: now(),
+  updatedAt: now(),
+  tags: seedTags.filter((tag) => input.tags.some((name) => name.toLowerCase() === tag.name.toLowerCase()))
+}));
 
 export const defaultSettings: AppSettings = {
   locale: "en",
@@ -82,14 +64,7 @@ export const defaultSettings: AppSettings = {
   showUsageCount: true,
   showTagsInLauncher: true,
   developerMode: false,
-  shortcuts: {
-    globalLauncher: "Alt+Space",
-    focusSearch: "Meta+K",
-    copySelected: "Enter",
-    pasteSelected: "Meta+Enter",
-    editSelected: "Meta+KeyE",
-    jumpResult: "Meta"
-  }
+  shortcuts: defaultShortcutBindings()
 };
 
 const settingKeys = [
@@ -227,6 +202,31 @@ function tagObjects(names: string[]): PromptTag[] {
   );
 }
 
+function matchesStarterSnippet(existing: Prompt, input: PromptInput): boolean {
+  const existingAlias = existing.alias?.trim().toLowerCase();
+  const inputAlias = input.alias?.trim().toLowerCase();
+  return (
+    Boolean(inputAlias && existingAlias === inputAlias) ||
+    existing.title.trim().toLowerCase() === input.title.trim().toLowerCase()
+  );
+}
+
+function createMockPrompt(input: PromptInput): Prompt {
+  return {
+    id: id(),
+    title: input.title,
+    body: input.body,
+    alias: input.alias,
+    notes: input.notes,
+    isFavorite: input.isFavorite,
+    usageCount: 0,
+    lastUsedAt: null,
+    createdAt: now(),
+    updatedAt: now(),
+    tags: tagObjects(input.tags)
+  };
+}
+
 async function writeClipboardText(text: string): Promise<void> {
   try {
     await navigator.clipboard?.writeText(text);
@@ -255,21 +255,26 @@ export async function listPrompts(): Promise<Prompt[]> {
   return getMockPrompts();
 }
 
+export async function restoreStarterSnippets(locale: LocaleCode): Promise<number> {
+  if (isTauri()) return invoke<number>("restore_starter_snippets", { locale });
+
+  const existing = getMockPrompts();
+  const restored = starterSnippetInputsForLocale(locale)
+    .filter((input) => !existing.some((prompt) => matchesStarterSnippet(prompt, input)))
+    .map(createMockPrompt);
+
+  if (restored.length > 0) {
+    writeStore(PROMPTS_KEY, [...restored, ...existing]);
+  }
+
+  return restored.length;
+}
+
+export { STARTER_SNIPPET_COUNT };
+
 export async function createPrompt(input: PromptInput): Promise<Prompt> {
   if (isTauri()) return invoke<Prompt>("create_prompt", { input });
-  const prompt: Prompt = {
-    id: id(),
-    title: input.title,
-    body: input.body,
-    alias: input.alias,
-    notes: input.notes,
-    isFavorite: input.isFavorite,
-    usageCount: 0,
-    lastUsedAt: null,
-    createdAt: now(),
-    updatedAt: now(),
-    tags: tagObjects(input.tags)
-  };
+  const prompt = createMockPrompt(input);
   writeStore(PROMPTS_KEY, [prompt, ...getMockPrompts()]);
   return prompt;
 }
@@ -372,7 +377,10 @@ export async function loadSettings(seed: Partial<AppSettings> = {}): Promise<App
     settings = withSetting(settings, key, value);
   }
 
-  return settings;
+  return {
+    ...settings,
+    shortcuts: migrateShortcutBindingsForPlatform(settings.shortcuts)
+  };
 }
 
 export async function saveSettings(settings: AppSettings): Promise<void> {
@@ -460,4 +468,9 @@ export async function backupDatabase(): Promise<SavedFile> {
 export async function onLauncherShortcut(callback: () => void): Promise<() => void> {
   if (!isTauri()) return () => undefined;
   return listen("promptpop:launcher-shortcut", callback);
+}
+
+export async function onOpenSettingsRequest(callback: () => void): Promise<() => void> {
+  if (!isTauri()) return () => undefined;
+  return listen("promptpop:open-settings", callback);
 }

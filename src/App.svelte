@@ -13,9 +13,11 @@
     listPrompts,
     listTags,
     onLauncherShortcut,
+    onOpenSettingsRequest,
     openSettingsTarget,
     pastePrompt,
     registerLauncherShortcut,
+    restoreStarterSnippets,
     saveExport,
     saveSettings,
     setLaunchAtLogin,
@@ -33,6 +35,12 @@
     type TranslationKey,
     type TranslationValues
   } from "./lib/i18n";
+  import {
+    detectDesktopPlatform,
+    isShortcutModifier,
+    shortcutKeyLabel,
+    shortcutModifierExample
+  } from "./lib/platform";
   import type {
     AppEnvironment,
     AppSettings,
@@ -59,6 +67,9 @@
     isFavorite: false,
     tags: []
   };
+
+  const desktopPlatform = detectDesktopPlatform();
+  const isMacOS = desktopPlatform === "macos";
 
   const settingsSectionIds: SettingSection[] = [
     "general",
@@ -101,6 +112,8 @@
         markdownExportRequested: "Markdown export requested",
         importRequested: "Import requested",
         backupRequested: "Backup requested",
+        starterSnippetsAlreadyPresent: "Starter snippets already present",
+        starterSnippetsRestored: "Starter snippets restored",
         appearanceApplied: "Appearance applied",
         openLogsRequested: "Open logs requested",
         diagnosticsCopied: "Diagnostics copied",
@@ -121,19 +134,20 @@
         light: "Light",
         dark: "Dark",
         launcher: "Launcher",
-        library: "Library",
+        library: "Snippets",
         compact: "Compact",
         comfortable: "Comfortable",
         open: "Open",
         edit: "Edit",
         import: "Import",
+        restoreSnippets: "Restore snippets",
         reset: "Reset",
         backUpNow: "Back up now",
         copyReport: "Copy report",
         openFolder: "Open folder",
         openSystemSettings: "Open System Settings",
         testPaste: "Test Paste",
-        applyAppearance: "Apply across launcher and library"
+        applyAppearance: "Apply across launcher and snippets"
       },
       general: {
         heading: "General",
@@ -150,7 +164,7 @@
         localFirstDescription:
           "These preferences are stored in the local database and are not synced to the cloud. Shortcuts and permissions still require separate macOS authorization.",
         sqliteTitle: "SQLite · Local",
-        sqliteDescription: "Preferences and prompts stay on this device.",
+        sqliteDescription: "Preferences and snippets stay on this device.",
         shortcutTitle: "Common shortcuts",
         launcherShortcut: "Launcher",
         focusSearchShortcut: "Focus search",
@@ -160,14 +174,14 @@
       },
       shortcuts: {
         heading: "Shortcuts",
-        description: "Manage keyboard actions for launching, searching, editing, and inserting prompts.",
+        description: "Manage keyboard actions for launching, searching, editing, and inserting snippets.",
         recordingPrefix: "Recording",
         recordingTitle: "Recording shortcut",
         recordingHint: "Press the new shortcut. Esc cancels.",
-        jumpRecordingHint: "Press the prefix modifier, for example Cmd. Results use that prefix plus 1...9.",
+        jumpRecordingHint: "Press the prefix modifier, for example {modifier}. Results use that prefix plus 1...9.",
         conflictPrefix: "Conflict with",
         conflictHint: "Choose a different shortcut to avoid unpredictable behavior.",
-        unavailableHint: "Shortcut unavailable. It may already be used by macOS or another app.",
+        unavailableHint: "Shortcut unavailable. It may already be used by the system or another app.",
         rows: {
           globalLauncher: {
             title: "Global launcher",
@@ -178,20 +192,20 @@
             description: "Move focus to the launcher search input."
           },
           copySelected: {
-            title: "Copy selected prompt",
-            description: "Copy the highlighted prompt content."
+            title: "Copy selected snippet",
+            description: "Copy the highlighted snippet content."
           },
           pasteSelected: {
-            title: "Paste selected prompt",
-            description: "Paste the highlighted prompt into the active app."
+            title: "Paste selected snippet",
+            description: "Paste the highlighted snippet into the active app."
           },
           editSelected: {
-            title: "Edit selected prompt",
-            description: "Open the editor for the selected prompt."
+            title: "Edit selected snippet",
+            description: "Open the editor for the selected snippet."
           },
           jumpResult: {
             title: "Quick use result",
-            description: "Choose a prefix key; results use that prefix plus 1 through 9 to use a prompt immediately."
+            description: "Choose a prefix key; results use that prefix plus 1 through 9 to use a snippet immediately."
           }
         }
       },
@@ -199,7 +213,7 @@
         eyebrow: "Settings",
         heading: "Paste & Permissions",
         description:
-          "Control how PromptPop pastes selected prompts and verify the macOS permissions needed for reliable automation.",
+          "Control how PromptPop pastes selected snippets and verify the macOS permissions needed for reliable automation.",
         accessibilityTitle: "macOS Accessibility",
         accessibilityDescription: "Required to paste into other apps",
         required: "Required",
@@ -208,9 +222,9 @@
         granted: "Granted",
         autoPasteTitle: "Paste on quick use",
         autoPasteDescription:
-          "When enabled, result number shortcuts send the prompt to the active app instead of only copying it.",
+          "When enabled, result number shortcuts send the snippet to the active app instead of only copying it.",
         clipboardNote:
-          "Clipboard fallback stays active. When quick paste is disabled, result number shortcuts copy and hide PromptPop.",
+          "Clipboard fallback stays active. When quick paste is disabled, result number shortcuts copy the snippet and hide PromptPop.",
         helpTitle: "Permission help",
         helpDescription:
           "Open System Settings, enable PromptPop under Accessibility, then return here and run Test Paste to confirm the active app accepts the paste event.",
@@ -218,45 +232,47 @@
       },
       data: {
         heading: "Data",
-        description: "Manage the local SQLite database, import, export, and backups.",
+        description: "Manage the local SQLite database, language-aware starter snippets, import, export, and backups.",
         databaseTitle: "SQLite database location",
-        exportTitle: "Export prompts",
-        exportDescription: "Save a portable copy of prompts and tags.",
-        importTitle: "Import prompts",
-        importDescription: "Merge JSON or Markdown exports into the local library.",
+        exportTitle: "Export snippets",
+        exportDescription: "Save a portable copy of snippets and tags.",
+        importTitle: "Import snippets",
+        importDescription: "Merge JSON or Markdown exports into the local snippet library.",
+        starterTitle: "Starter snippets",
+        starterDescription: "Restore the 18 starter snippets for the current app language without overwriting existing snippets.",
         backupTitle: "Local backup",
         backupDescription: "Keep a timestamped copy beside the database.",
         storageTitle: "Storage summary",
-        storageDescription: "PromptPop keeps prompt content, tags, and backups on this device.",
-        prompts: "Prompts",
+        storageDescription: "PromptPop keeps snippet content, tags, and backups on this device.",
+        prompts: "Snippets",
         tags: "Tags",
         lastBackup: "Last backup",
         readyTitle: "Ready for export",
-        readyDescription: "Database is readable and the backup directory is available.",
+        readyDescription: "Database is readable and starter snippets can be restored by language.",
         backupEnabledTitle: "Local backup enabled",
-        backupEnabledDescription: "Creates promptpop-backup.sqlite before destructive imports."
+        backupEnabledDescription: "Create promptpop-backup.sqlite before importing or restoring language-aware starter snippets."
       },
       appearance: {
         heading: "Appearance",
         description: "Tune launcher density, preview, and typography.",
         densityTitle: "Density",
-        densityDescription: "Choose how tightly PromptPop packs prompt rows and metadata.",
+        densityDescription: "Choose how tightly PromptPop packs snippet rows and metadata.",
         previewTitle: "Enable preview peek",
-        previewDescription: "Use Space to temporarily inspect the selected prompt without leaving the launcher.",
+        previewDescription: "Use Space to temporarily inspect the selected snippet without leaving the launcher.",
         usageTitle: "Show usage count",
-        usageDescription: "Display run counts beside frequently used prompts.",
+        usageDescription: "Display run counts beside frequently used snippets.",
         tagsTitle: "Show tags in launcher",
-        tagsDescription: "Reveal prompt categories inline under each launcher result.",
+        tagsDescription: "Reveal snippet categories inline under each launcher result.",
         uiFontTitle: "UI font",
         uiFontDescription: "Geist keeps settings, labels, and metadata crisp at compact density.",
         fontPreviewLabel: "Launcher label · 12px",
-        promptFontTitle: "Prompt preview font",
-        promptFontDescription: "JetBrains Mono preserves indentation and placeholder syntax in prompt bodies.",
+        promptFontTitle: "Snippet preview font",
+        promptFontDescription: "JetBrains Mono preserves indentation and placeholder syntax in snippet bodies.",
         promptPreviewSample: "{{topic}} summary",
         promptPreviewNote: "Keep concise",
         behaviorTitle: "Preview behavior",
         behaviorDescription:
-          "Appearance changes apply to launcher chrome first, then prompt rows and the preview pane.",
+          "Appearance changes apply to launcher chrome first, then snippet rows and the preview pane.",
         themeDirectionTitle: "Theme preview direction",
         themeDirectionDescription: "Preview left-to-right from current theme to target theme before applying.",
         narrowTitle: "Narrow windows",
@@ -278,7 +294,7 @@
         osPermission: "OS permission",
         accessibilityGranted: "Accessibility granted",
         resetTitle: "Reset settings",
-        resetDescription: "Restore default preferences without deleting SQLite prompt data.",
+        resetDescription: "Restore default preferences without deleting SQLite snippet data.",
         dangerConfirmation: "Dangerous actions require keyboard confirmation before they run.",
         principleTitle: "Advanced settings principles",
         principleDescription:
@@ -315,6 +331,8 @@
         markdownExportRequested: "已请求导出 Markdown",
         importRequested: "已请求导入",
         backupRequested: "已请求备份",
+        starterSnippetsAlreadyPresent: "默认短片段已存在",
+        starterSnippetsRestored: "默认短片段已恢复",
         appearanceApplied: "外观设置已应用",
         openLogsRequested: "已请求打开日志",
         diagnosticsCopied: "诊断信息已复制",
@@ -335,19 +353,20 @@
         light: "浅色",
         dark: "深色",
         launcher: "启动器",
-        library: "词库",
+        library: "片段库",
         compact: "紧凑",
         comfortable: "舒适",
         open: "打开",
         edit: "编辑",
         import: "导入",
+        restoreSnippets: "恢复片段",
         reset: "重置",
         backUpNow: "立即备份",
         copyReport: "复制报告",
         openFolder: "打开文件夹",
         openSystemSettings: "打开系统设置",
         testPaste: "测试粘贴",
-        applyAppearance: "应用到启动器和词库"
+        applyAppearance: "应用到启动器和片段库"
       },
       general: {
         heading: "通用",
@@ -364,7 +383,7 @@
         localFirstDescription:
           "这些偏好会保存在本机数据库中，不会同步到云端。快捷键和权限仍需要 macOS 单独授权。",
         sqliteTitle: "SQLite · 本地",
-        sqliteDescription: "偏好与提示词会保存在本机。",
+        sqliteDescription: "偏好与短片段会保存在本机。",
         shortcutTitle: "常用快捷键",
         launcherShortcut: "启动器",
         focusSearchShortcut: "聚焦搜索",
@@ -373,14 +392,14 @@
       },
       shortcuts: {
         heading: "快捷键",
-        description: "管理启动、搜索、编辑和插入提示词的键盘操作。",
+        description: "管理启动、搜索、编辑和插入片段的键盘操作。",
         recordingPrefix: "正在录制",
         recordingTitle: "正在录制快捷键",
         recordingHint: "按下新的快捷键。Esc 取消。",
-        jumpRecordingHint: "请按下前置修饰键，例如 Cmd。实际使用时会是该按键加 1 到 9 并立即使用提示词。",
+        jumpRecordingHint: "请按下前置修饰键，例如 {modifier}。实际使用时会是该按键加 1 到 9 并立即使用片段。",
         conflictPrefix: "与以下快捷键冲突：",
         conflictHint: "请换一个组合，避免触发行为不可预测。",
-        unavailableHint: "快捷键不可用，可能已被 macOS 或其他应用占用。",
+        unavailableHint: "快捷键不可用，可能已被系统或其他应用占用。",
         rows: {
           globalLauncher: {
             title: "全局启动器",
@@ -391,27 +410,27 @@
             description: "将焦点移动到启动器搜索框。"
           },
           copySelected: {
-            title: "复制选中的提示词",
-            description: "复制当前高亮的提示词内容。"
+            title: "复制选中的片段",
+            description: "复制当前高亮的短片段内容。"
           },
           pasteSelected: {
-            title: "粘贴选中的提示词",
-            description: "把当前高亮的提示词粘贴到活跃应用。"
+            title: "粘贴选中的片段",
+            description: "把当前高亮的短片段粘贴到活跃应用。"
           },
           editSelected: {
-            title: "编辑选中的提示词",
-            description: "打开所选提示词的编辑面板。"
+            title: "编辑选中的片段",
+            description: "打开所选片段的编辑面板。"
           },
           jumpResult: {
             title: "快速使用结果",
-            description: "选择前置按键；实际使用时是该按键加 1 到 9，并立即使用对应提示词。"
+            description: "选择前置按键；实际使用时是该按键加 1 到 9，并立即使用对应片段。"
           }
         }
       },
       paste: {
         eyebrow: "设置",
         heading: "粘贴与权限",
-        description: "控制 PromptPop 如何粘贴选中的提示词，并检查可靠自动化所需的 macOS 权限。",
+        description: "控制 PromptPop 如何粘贴选中的短片段，并检查可靠自动化所需的 macOS 权限。",
         accessibilityTitle: "macOS 辅助功能",
         accessibilityDescription: "粘贴到其他应用时需要此权限",
         required: "必需",
@@ -419,8 +438,8 @@
         clipboardDescription: "缺少粘贴权限时仍可使用",
         granted: "已授权",
         autoPasteTitle: "快速使用时粘贴",
-        autoPasteDescription: "启用后，结果数字快捷键会把提示词发送到当前活跃应用，而不是只复制。",
-        clipboardNote: "剪贴板兜底始终可用。关闭快速粘贴时，结果数字快捷键会复制提示词并隐藏 PromptPop。",
+        autoPasteDescription: "启用后，结果数字快捷键会把短片段发送到当前活跃应用，而不是只复制。",
+        clipboardNote: "剪贴板兜底始终可用。关闭快速粘贴时，结果数字快捷键会复制片段并隐藏 PromptPop。",
         helpTitle: "权限帮助",
         helpDescription:
           "打开系统设置，在辅助功能中启用 PromptPop，然后回到这里运行测试粘贴，确认活跃应用能接收粘贴事件。",
@@ -428,44 +447,46 @@
       },
       data: {
         heading: "数据",
-        description: "管理本地 SQLite 数据库、导入导出和备份。",
+        description: "管理本地 SQLite 数据库、按语言初始化的默认短片段、导入导出和备份。",
         databaseTitle: "SQLite 数据库位置",
-        exportTitle: "导出提示词",
-        exportDescription: "保存一份可迁移的提示词和标签副本。",
-        importTitle: "导入提示词",
-        importDescription: "将 JSON 或 Markdown 导出文件合并到本地词库。",
+        exportTitle: "导出片段",
+        exportDescription: "保存短片段和标签的可迁移副本。",
+        importTitle: "导入片段",
+        importDescription: "将 JSON 或 Markdown 导出合并到本地片段库。",
+        starterTitle: "默认短片段",
+        starterDescription: "恢复与当前界面语言匹配的 18 条短片段；不会覆盖已有内容。",
         backupTitle: "本地备份",
         backupDescription: "在数据库旁保留带时间戳的副本。",
         storageTitle: "存储概览",
-        storageDescription: "PromptPop 会把提示词内容、标签和备份保存在这台设备上。",
-        prompts: "提示词",
+        storageDescription: "PromptPop 会把短片段、标签和备份保存在这台设备上。",
+        prompts: "短片段",
         tags: "标签",
         lastBackup: "上次备份",
         readyTitle: "可导出",
-        readyDescription: "数据库可读取，备份目录可用。",
+        readyDescription: "数据库可读取，默认短片段会按语言恢复。",
         backupEnabledTitle: "已启用本地备份",
-        backupEnabledDescription: "执行破坏性导入前会创建 promptpop-backup.sqlite。"
+        backupEnabledDescription: "导入或按当前语言恢复默认短片段前可先创建 promptpop-backup.sqlite。"
       },
       appearance: {
         heading: "外观",
         description: "调整启动器密度、预览和字体。",
         densityTitle: "密度",
-        densityDescription: "选择 PromptPop 如何紧凑地展示提示词行和元数据。",
+        densityDescription: "选择 PromptPop 如何紧凑地展示片段行和元数据。",
         previewTitle: "启用快速预览",
-        previewDescription: "在启动器中按 Space 临时查看已选提示词，无需离开当前搜索。",
+        previewDescription: "在启动器中按 Space 临时查看已选片段，无需离开当前搜索。",
         usageTitle: "显示使用次数",
-        usageDescription: "在常用提示词旁显示运行次数。",
+        usageDescription: "在常用片段旁显示运行次数。",
         tagsTitle: "在启动器中显示标签",
-        tagsDescription: "在每条启动器结果下方显示提示词分类。",
+        tagsDescription: "在每条启动器结果下方显示片段分类。",
         uiFontTitle: "界面字体",
         uiFontDescription: "Geist 让设置、标签和元数据在紧凑密度下保持清晰。",
         fontPreviewLabel: "启动器标签 · 12px",
-        promptFontTitle: "提示词预览字体",
-        promptFontDescription: "JetBrains Mono 会保留提示词正文中的缩进和占位符语法。",
+        promptFontTitle: "片段预览字体",
+        promptFontDescription: "JetBrains Mono 会保留短片段正文中的缩进和占位符语法。",
         promptPreviewSample: "{{主题}} 摘要",
         promptPreviewNote: "保持简洁",
         behaviorTitle: "预览行为",
-        behaviorDescription: "外观变化会先应用到启动器框架，再应用到提示词行和预览面板。",
+        behaviorDescription: "外观变化会先应用到启动器框架，再应用到片段行和预览面板。",
         themeDirectionTitle: "主题预览方向",
         themeDirectionDescription: "从当前主题向目标主题从左到右预览后再应用。",
         narrowTitle: "窄窗口",
@@ -486,7 +507,7 @@
         osPermission: "系统权限",
         accessibilityGranted: "辅助功能已授权",
         resetTitle: "重置设置",
-        resetDescription: "恢复默认偏好设置，但不删除 SQLite 提示词数据。",
+        resetDescription: "恢复默认偏好设置，但不删除 SQLite 片段数据。",
         dangerConfirmation: "危险操作会先要求键盘确认，不会立即执行。",
         principleTitle: "高级设置原则",
         principleDescription: "这些操作主要用于排障。危险操作保持二次确认，日志和诊断信息默认只留在本机。",
@@ -546,6 +567,14 @@
 
   $: text = getMessages(locale);
   $: settings = settingsCopy[locale];
+  $: platformPasteSettings = pasteSettingsForPlatform(settings.paste);
+  $: platformGeneralPermission = generalPermissionForPlatform(settings.general);
+  $: platformLaunchDescription = launchDescriptionForPlatform(settings.general.launchDescription);
+  $: platformLocalFirstDescription = localFirstDescriptionForPlatform(settings.general.localFirstDescription);
+  $: pasteAutomationReady = !isMacOS || appEnvironment?.accessibilityTrusted === true;
+  $: pasteAutomationStatus = pasteAutomationReady
+    ? platformPasteSettings.granted
+    : platformPasteSettings.lastChecked;
   $: settingsSections = settingsSectionIds
     .map((id) => ({
       id,
@@ -582,8 +611,12 @@
 
     void bootstrap();
     let unlistenLauncher: (() => void) | null = null;
+    let unlistenOpenSettings: (() => void) | null = null;
     void onLauncherShortcut(() => openDefaultView()).then((unlisten) => {
       unlistenLauncher = unlisten;
+    });
+    void onOpenSettingsRequest(() => openSettings()).then((unlisten) => {
+      unlistenOpenSettings = unlisten;
     });
 
     const onKeydown = (event: KeyboardEvent) => {
@@ -667,11 +700,149 @@
     return () => {
       window.removeEventListener("keydown", onKeydown);
       unlistenLauncher?.();
+      unlistenOpenSettings?.();
     };
   });
 
   function translate(key: TranslationKey, values?: TranslationValues): string {
     return t(locale, key, values);
+  }
+
+  function pasteSettingsForPlatform(paste: typeof settingsCopy.en.paste): typeof settingsCopy.en.paste {
+    if (desktopPlatform === "windows") {
+      return locale === "zh-CN"
+        ? {
+            ...paste,
+            heading: "粘贴行为",
+            description: "控制 PromptPop 如何复制片段，并在 Windows 上通过剪贴板和 Ctrl+V 尝试自动粘贴。",
+            accessibilityTitle: "Windows 自动粘贴",
+            accessibilityDescription: "使用剪贴板并向上一个活跃窗口发送 Ctrl+V",
+            required: "可用",
+            clipboardDescription: "目标应用不接收自动粘贴时仍可手动粘贴",
+            granted: "可用",
+            clipboardNote:
+              "剪贴板兜底始终可用。Windows 自动粘贴会先隐藏 PromptPop，再尝试回到上一个窗口发送 Ctrl+V。",
+            helpTitle: "Windows 行为说明",
+            helpDescription:
+              "Windows 不需要 macOS 辅助功能权限。管理员窗口、UAC 安全桌面或部分受保护应用可能拒绝模拟按键；这种情况下片段仍会保留在剪贴板。",
+            lastChecked: "无需单独授权"
+          }
+        : {
+            ...paste,
+            heading: "Paste Behavior",
+            description:
+              "Control how PromptPop copies snippets and attempts Windows auto paste through the clipboard plus Ctrl+V.",
+            accessibilityTitle: "Windows auto paste",
+            accessibilityDescription: "Uses the clipboard and sends Ctrl+V to the previous active window",
+            required: "Available",
+            clipboardDescription: "Still works when the target app does not accept auto paste",
+            granted: "Available",
+            clipboardNote:
+              "Clipboard fallback is always available. On Windows, auto paste hides PromptPop, returns to the previous window, then sends Ctrl+V.",
+            helpTitle: "Windows behavior",
+            helpDescription:
+              "Windows does not require macOS Accessibility permission. Admin windows, the UAC secure desktop, and some protected apps may reject simulated keys; the snippet remains on the clipboard when that happens.",
+            lastChecked: "No separate permission required"
+          };
+    }
+
+    if (desktopPlatform === "linux") {
+      return locale === "zh-CN"
+        ? {
+            ...paste,
+            heading: "粘贴行为",
+            description: "控制 PromptPop 如何复制片段；当前 Linux 桌面以剪贴板兜底为主。",
+            accessibilityTitle: "Linux 自动粘贴",
+            accessibilityDescription: "当前未启用跨桌面自动粘贴，建议使用剪贴板手动粘贴",
+            required: "未启用",
+            clipboardDescription: "复制后可在目标应用中手动粘贴",
+            granted: "可用",
+            clipboardNote: "剪贴板兜底始终可用。Linux 自动粘贴会在后续按桌面环境分别适配。",
+            helpTitle: "Linux 行为说明",
+            helpDescription: "不同桌面环境对模拟按键支持差异较大；当前版本不显示 macOS 权限，也不假装执行权限检查。",
+            lastChecked: "剪贴板可用"
+          }
+        : {
+            ...paste,
+            heading: "Paste Behavior",
+            description: "Control how PromptPop copies snippets; this Linux build currently favors clipboard fallback.",
+            accessibilityTitle: "Linux auto paste",
+            accessibilityDescription: "Cross-desktop auto paste is not enabled yet; paste manually from the clipboard",
+            required: "Not enabled",
+            clipboardDescription: "Copy first, then paste manually in the target app",
+            granted: "Available",
+            clipboardNote: "Clipboard fallback is always available. Linux auto paste can be adapted per desktop environment later.",
+            helpTitle: "Linux behavior",
+            helpDescription:
+              "Simulated key support varies across desktop environments, so this version avoids showing macOS permissions or pretending to check them.",
+            lastChecked: "Clipboard available"
+          };
+    }
+
+    return paste;
+  }
+
+  function generalPermissionForPlatform(general: typeof settingsCopy.en.general) {
+    if (desktopPlatform === "windows") {
+      return locale === "zh-CN"
+        ? {
+            title: "Windows 自动粘贴",
+            description: "自动粘贴使用剪贴板和 Ctrl+V；受保护窗口不接收时仍可手动粘贴。"
+          }
+        : {
+            title: "Windows auto paste",
+            description: "Auto paste uses the clipboard plus Ctrl+V; protected windows can still be pasted into manually."
+          };
+    }
+
+    if (desktopPlatform === "linux") {
+      return locale === "zh-CN"
+        ? {
+            title: "剪贴板粘贴",
+            description: "当前 Linux 版本以剪贴板为兜底，不显示 macOS 辅助功能权限。"
+          }
+        : {
+            title: "Clipboard paste",
+            description: "This Linux build uses clipboard fallback and does not show macOS Accessibility permission."
+          };
+    }
+
+    return {
+      title: general.accessibilityTitle,
+      description: general.accessibilityDescription
+    };
+  }
+
+  function launchDescriptionForPlatform(fallback: string): string {
+    if (desktopPlatform === "windows") {
+      return locale === "zh-CN"
+        ? "登录 Windows 后自动启动 PromptPop。"
+        : "Start PromptPop automatically after signing in to Windows.";
+    }
+
+    if (desktopPlatform === "linux") {
+      return locale === "zh-CN"
+        ? "当前 Linux 版本暂不启用系统级开机启动。"
+        : "System launch at login is not enabled for this Linux build yet.";
+    }
+
+    return fallback;
+  }
+
+  function localFirstDescriptionForPlatform(fallback: string): string {
+    if (desktopPlatform === "windows") {
+      return locale === "zh-CN"
+        ? "这些偏好会保存在本机数据库中，不会同步到云端。快捷键、自动粘贴和开机启动都使用 Windows 本机能力。"
+        : "These preferences are stored in the local database and are not synced to the cloud. Shortcuts, auto paste, and launch at login use native Windows behavior.";
+    }
+
+    if (desktopPlatform === "linux") {
+      return locale === "zh-CN"
+        ? "这些偏好会保存在本机数据库中，不会同步到云端。当前 Linux 版本以本机快捷键和剪贴板兜底为主。"
+        : "These preferences are stored in the local database and are not synced to the cloud. This Linux build favors native shortcuts and clipboard fallback.";
+    }
+
+    return fallback;
   }
 
   function shouldTogglePreview(event: KeyboardEvent): boolean {
@@ -820,10 +991,10 @@
   }
 
   function promptListMeta(prompt: Prompt) {
-    const alias = prompt.alias ? prompt.alias : "";
-    const tagNames = showTagsInLauncher ? prompt.tags.map((tag) => tag.name).join(", ") : "";
+    const alias = prompt.alias ? `/${prompt.alias.replace(/^\/+/, "")}` : "";
+    const tagNames = showTagsInLauncher ? prompt.tags.map((tag) => `#${tag.name}`).join(" · ") : "";
     const debugId = developerMode ? `id:${prompt.id.slice(0, 8)}` : "";
-    return [alias, tagNames, debugId].filter(Boolean).join(" / ") || text.noMetadata;
+    return [alias, tagNames, debugId].filter(Boolean).join(" · ") || text.noMetadata;
   }
 
   function normalizeShortcutBindings(bindings: typeof shortcutBindings) {
@@ -836,21 +1007,19 @@
   function normalizeJumpPrefix(shortcut: string): string {
     const modifiers = shortcut
       .split("+")
-      .filter((part) => ["Meta", "Control", "Alt", "Shift"].includes(part));
+      .filter(isShortcutModifier);
     return modifiers.length ? modifiers.join("+") : defaultSettings.shortcuts.jumpResult;
   }
 
   function shortcutLabels(shortcut: string): string[] {
-    const isJumpPrefix = !shortcut.split("+").some((part) => !["Meta", "Control", "Alt", "Shift"].includes(part));
-    const labels = shortcut.split("+").filter(Boolean).map((part) => {
-      if (part === "Meta") return "Cmd";
-      if (part === "Alt") return "Option";
-      if (part === "Control") return "Ctrl";
-      if (part.startsWith("Key")) return part.replace("Key", "");
-      if (part.startsWith("Digit")) return part.replace("Digit", "");
-      return part;
-    });
+    const isJumpPrefix = !shortcut.split("+").some((part) => !isShortcutModifier(part));
+    const labels = shortcut.split("+").filter(Boolean).map((part) => shortcutKeyLabel(part, desktopPlatform));
     return isJumpPrefix ? [...labels, "1...9"] : labels;
+  }
+
+  function shortcutRecordingHint(id: ShortcutId): string {
+    const hint = id === "jumpResult" ? settings.shortcuts.jumpRecordingHint : settings.shortcuts.recordingHint;
+    return hint.replace("{modifier}", shortcutModifierExample(desktopPlatform));
   }
 
   function shortcutText(shortcut: string): string {
@@ -1040,7 +1209,7 @@
   }
 
   function promptSnippet(prompt: Prompt) {
-    return prompt.notes?.trim() || prompt.body.replace(/\s+/g, " ").trim();
+    return prompt.body.replace(/\s+/g, " ").trim();
   }
 
   async function refresh() {
@@ -1358,6 +1527,21 @@
     }
   }
 
+  async function restoreDefaultSnippets() {
+    try {
+      if (localBackup) await runBackup();
+      const restoredCount = await restoreStarterSnippets(locale);
+      await refresh();
+      markSettingsSaved(
+        restoredCount > 0
+          ? `${settings.statuses.starterSnippetsRestored}: ${restoredCount}`
+          : settings.statuses.starterSnippetsAlreadyPresent
+      );
+    } catch (error) {
+      status = error instanceof Error ? error.message : settings.savedMessage;
+    }
+  }
+
   function openImportPicker() {
     importInput?.click();
   }
@@ -1387,7 +1571,7 @@
     if (filename.toLowerCase().endsWith(".json")) {
       const parsed = JSON.parse(content);
       const source = Array.isArray(parsed) ? parsed : parsed.prompts;
-      if (!Array.isArray(source)) throw new Error("JSON export must contain prompts");
+      if (!Array.isArray(source)) throw new Error("JSON export must contain a prompts array");
       return source.map((item: Partial<Prompt>) => ({
         title: String(item.title ?? "").trim(),
         body: String(item.body ?? "").trim(),
@@ -1553,6 +1737,7 @@
                       <span class="result-title">
                         <strong>{prompt.title}</strong>
                       </span>
+                      <span class="result-snippet"><span>{text.body}:</span> {promptSnippet(prompt)}</span>
                       <span class="result-meta">{promptListMeta(prompt)}</span>
                     </span>
                     <span class="result-side">
@@ -1694,7 +1879,7 @@
               <article class="settings-row">
                 <div>
                   <strong>{settings.general.launchTitle}</strong>
-                  <span>{settings.general.launchDescription}</span>
+                  <span>{platformLaunchDescription}</span>
                 </div>
                 <button
                   class="toggle-switch"
@@ -1723,7 +1908,7 @@
             <aside class="settings-context">
               <article>
                 <h3>{settings.general.localFirstTitle}</h3>
-                <p>{settings.general.localFirstDescription}</p>
+                <p>{platformLocalFirstDescription}</p>
               </article>
               <article class="highlight-card">
                 <strong>{settings.general.sqliteTitle}</strong>
@@ -1745,8 +1930,8 @@
                 </strong>
               </article>
               <article>
-                <h3>{settings.general.accessibilityTitle}</h3>
-                <p>{settings.general.accessibilityDescription}</p>
+                <h3>{platformGeneralPermission.title}</h3>
+                <p>{platformGeneralPermission.description}</p>
               </article>
             </aside>
           </div>
@@ -1763,7 +1948,7 @@
             <div class="shortcut-recorder">
               <div>
                 <strong>{settings.shortcuts.recordingPrefix} {settings.shortcuts.rows[recordingShortcutId].title}</strong>
-                <span>{recordingShortcutId === "jumpResult" ? settings.shortcuts.jumpRecordingHint : settings.shortcuts.recordingHint}</span>
+                <span>{shortcutRecordingHint(recordingShortcutId)}</span>
               </div>
               <div class="shortcut-keys">
                 {#each recordingShortcutId === "jumpResult" ? shortcutPrefixLabels(shortcutBindings.jumpResult) : shortcutLabels(shortcutBindings[recordingShortcutId]) as key}
@@ -1800,9 +1985,9 @@
         {:else if activeSettingsSection === "paste"}
           <header class="settings-page-header">
             <div>
-              <span class="eyebrow">{settings.paste.eyebrow}</span>
-              <h2>{settings.paste.heading}</h2>
-              <p>{settings.paste.description}</p>
+              <span class="eyebrow">{platformPasteSettings.eyebrow}</span>
+              <h2>{platformPasteSettings.heading}</h2>
+              <p>{platformPasteSettings.description}</p>
             </div>
           </header>
 
@@ -1810,26 +1995,26 @@
             <article>
               <span class="permission-icon">A</span>
               <div>
-                <strong>{settings.paste.accessibilityTitle}</strong>
-                <span>{settings.paste.accessibilityDescription}</span>
+                <strong>{platformPasteSettings.accessibilityTitle}</strong>
+                <span>{platformPasteSettings.accessibilityDescription}</span>
               </div>
-              <em>{settings.paste.required}</em>
+              <em class:granted={pasteAutomationReady}>{pasteAutomationReady ? platformPasteSettings.granted : platformPasteSettings.required}</em>
             </article>
             <article>
               <span class="permission-icon success">C</span>
               <div>
-                <strong>{settings.paste.clipboardTitle}</strong>
-                <span>{settings.paste.clipboardDescription}</span>
+                <strong>{platformPasteSettings.clipboardTitle}</strong>
+                <span>{platformPasteSettings.clipboardDescription}</span>
               </div>
-              <em class="granted">{settings.paste.granted}</em>
+              <em class="granted">{platformPasteSettings.granted}</em>
             </article>
           </div>
 
           <section class="settings-list standalone">
             <article class="settings-row">
               <div>
-                <strong>{settings.paste.autoPasteTitle}</strong>
-                <span>{settings.paste.autoPasteDescription}</span>
+                <strong>{platformPasteSettings.autoPasteTitle}</strong>
+                <span>{platformPasteSettings.autoPasteDescription}</span>
               </div>
               <button
                 class="toggle-switch"
@@ -1842,18 +2027,20 @@
                 <span></span>
               </button>
             </article>
-            <p class="settings-note">{settings.paste.clipboardNote}</p>
+            <p class="settings-note">{platformPasteSettings.clipboardNote}</p>
           </section>
 
           <article class="permission-help">
-            <strong>{settings.paste.helpTitle}</strong>
-            <span>{settings.paste.helpDescription}</span>
+            <strong>{platformPasteSettings.helpTitle}</strong>
+            <span>{platformPasteSettings.helpDescription}</span>
           </article>
 
           <div class="settings-actions-row">
-            <button class="primary-button" type="button" on:click={() => openTarget("accessibility")}>{settings.options.openSystemSettings}</button>
+            {#if isMacOS}
+              <button class="primary-button" type="button" on:click={() => openTarget("accessibility")}>{settings.options.openSystemSettings}</button>
+            {/if}
             <button class="quiet-button" type="button" on:click={runTestPaste}>{settings.options.testPaste}</button>
-            <span>{appEnvironment?.accessibilityTrusted ? settings.paste.granted : settings.paste.lastChecked}</span>
+            <span>{pasteAutomationStatus}</span>
           </div>
         {:else if activeSettingsSection === "data"}
           <header class="settings-page-header">
@@ -1898,6 +2085,14 @@
                   accept=".json,.md,.markdown,application/json,text/markdown,text/plain"
                   on:change={importPromptFile}
                 />
+              </article>
+
+              <article class="settings-row">
+                <div>
+                  <strong>{settings.data.starterTitle}</strong>
+                  <span>{settings.data.starterDescription}</span>
+                </div>
+                <button class="quiet-button" type="button" on:click={restoreDefaultSnippets}>{settings.options.restoreSnippets}</button>
               </article>
 
               <article class="settings-row">
@@ -2109,7 +2304,7 @@
                   <strong>{appEnvironment?.appVersion ?? "0.1.0"}</strong>
                   <strong>{prompts.length + tags.length}</strong>
                   <strong>{appEnvironment?.tauriVersion ?? "browser"}</strong>
-                  <strong class:danger-text={!appEnvironment?.accessibilityTrusted}>{appEnvironment?.accessibilityTrusted ? settings.paste.granted : settings.advanced.pending}</strong>
+                  <strong class:danger-text={!pasteAutomationReady}>{pasteAutomationReady ? platformPasteSettings.granted : settings.advanced.pending}</strong>
                 </div>
               </article>
 

@@ -6,6 +6,21 @@ search, prompt management, clipboard copy, and optional paste automation.
 
 > Status: early macOS-focused MVP.
 
+## Screenshots
+
+Screenshots are exported from the Pencil design source in
+`design/PromptPop_0.0.1.pen`.
+
+![PromptPop launcher with preview](docs/screenshots/launcher-preview.png)
+
+| Prompt library | Data settings |
+| --- | --- |
+| ![Prompt library management](docs/screenshots/library-management.png) | ![Data settings](docs/screenshots/data-settings.png) |
+
+| Windows paste behavior |
+| --- |
+| ![Windows paste behavior settings](docs/screenshots/windows-paste-settings.png) |
+
 ## Features
 
 - Save prompts with title, body, alias, notes, favorite flag, and tags.
