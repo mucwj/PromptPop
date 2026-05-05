@@ -44,16 +44,17 @@ sensitive.
 
 ## Platform Support
 
-PromptPop currently targets macOS first. Some desktop features are macOS-specific:
+PromptPop publishes first-run installers for macOS and Windows:
 
-- Launch at login writes a LaunchAgent.
-- Auto paste uses macOS automation through System Events.
-- Reliable auto paste requires Accessibility permission.
+- Windows x64 uses an NSIS `.exe` installer.
+- macOS Apple Silicon and macOS Intel use separate `.dmg` installers.
+- macOS launch at login writes a LaunchAgent.
+- macOS auto paste uses System Events and requires Accessibility permission.
+- Windows auto paste uses the clipboard and a native `Ctrl+V` send path.
 
-The codebase uses Tauri 2 and is structured to keep a path open for Windows and
-Linux, but those platforms are not release targets yet.
+Linux remains a future target.
 
-## macOS Signing and Notarization
+## Signing and Notarization
 
 Local development builds use ad-hoc signing (`signingIdentity = "-"`) because
 the project does not ship with an Apple Developer certificate. This is enough
@@ -75,16 +76,17 @@ certificate and notarize the app:
    npm run tauri:build:dmg
    ```
 
-Unsigned or ad-hoc signed artifacts are suitable for contributors and internal
-testing only. If macOS Gatekeeper blocks a local build, rebuild it locally or
-use a properly signed and notarized release.
+The current Windows installers are not code-signed yet. Unsigned or ad-hoc
+signed artifacts are suitable for contributors and early testing only. If macOS
+Gatekeeper blocks a local build, rebuild it locally or use a properly signed and
+notarized release.
 
 ## Requirements
 
 - Node.js 20 or newer
 - npm
 - Rust stable
-- macOS for the full Tauri desktop workflow
+- macOS or Windows for the full Tauri desktop workflow
 
 ## Development
 
@@ -130,8 +132,21 @@ Build a DMG release package from a normal, non-sandboxed macOS shell:
 npm run tauri:build:dmg
 ```
 
+Build a Windows NSIS installer from a normal Windows shell:
+
+```sh
+npm run tauri:build:windows
+```
+
 Note: DMG creation uses macOS `hdiutil` and Finder automation. It may fail in
 sandboxed terminals even when the `.app` bundle builds correctly.
+
+## Release
+
+Pushing a version tag such as `v0.0.1` runs the release workflow. The workflow
+creates a draft GitHub Release, builds the Windows x64 NSIS installer plus macOS
+Apple Silicon and Intel DMGs, uploads them as release assets, then publishes the
+release after all installers build successfully.
 
 ## Data Locations
 

@@ -1,6 +1,6 @@
 {
   "name": "promptpop",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "A local-first desktop prompt launcher for saving, searching, copying, and pasting reusable prompts.",
   "license": "MIT",
   "author": "PromptPop contributors",
@@ -35,7 +35,8 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "tauri:build:app": "tauri build --bundles app",
-    "tauri:build:dmg": "tauri build --bundles dmg"
+    "tauri:build:dmg": "tauri build --bundles dmg",
+    "tauri:build:windows": "tauri build --bundles nsis"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
